@@ -1,8 +1,10 @@
 /* eslint-disable */
 "use client";
 import { usePathname } from "next/navigation";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { UserAvatar } from "./UserAvatar";
+import { createClient } from "@/utils/supabase/client";
 
 interface MobileNavProps {
   profile: any;
@@ -10,6 +12,32 @@ interface MobileNavProps {
 
 export function MobileNav({ profile }: MobileNavProps) {
   const pathname = usePathname();
+  const [unreadCount, setUnreadCount] = useState(0);
+  const supabase = createClient();
+
+  useEffect(() => {
+    if (!profile?.clerk_user_id) return;
+    const fetchUnread = async () => {
+      const { count } = await supabase.from("messages")
+        .select("id", { count: "exact", head: true })
+        .eq("receiver_id", profile.clerk_user_id)
+        .eq("read", false);
+      setUnreadCount(count || 0);
+    };
+    fetchUnread();
+    // Poll every 15s
+    const interval = setInterval(fetchUnread, 15000);
+    // Also listen realtime
+    const channel = supabase.channel("mobile-unread")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `receiver_id=eq.${profile.clerk_user_id}` }, () => {
+        fetchUnread();
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages" }, () => {
+        fetchUnread();
+      })
+      .subscribe();
+    return () => { clearInterval(interval); supabase.removeChannel(channel); };
+  }, [profile?.clerk_user_id]);
 
   const tabs = [
     {
@@ -32,6 +60,7 @@ export function MobileNav({ profile }: MobileNavProps) {
         </svg>
       ),
       active: pathname === "/mensajes",
+      badge: unreadCount,
     },
     {
       href: "/lives",
@@ -62,7 +91,12 @@ export function MobileNav({ profile }: MobileNavProps) {
               <UserAvatar src={profile?.avatar_url} name={profile?.full_name || "U"} size="sm" />
             </div>
           ) : (
-            <div className="mobile-nav-icon">{tab.icon}</div>
+            <div className="mobile-nav-icon" style={{ position: "relative" }}>
+              {tab.icon}
+              {(tab as any).badge > 0 && (
+                <span className="mobile-nav-badge">{(tab as any).badge > 99 ? "99+" : (tab as any).badge}</span>
+              )}
+            </div>
           )}
           <span className="mobile-nav-label">{tab.label}</span>
         </Link>

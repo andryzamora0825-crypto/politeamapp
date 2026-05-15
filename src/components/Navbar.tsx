@@ -20,6 +20,7 @@ export function Navbar({ profile }: NavbarProps) {
   const supabase = createClient();
   const searchRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -30,6 +31,21 @@ export function Navbar({ profile }: NavbarProps) {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // Unread messages
+  useEffect(() => {
+    if (!profile?.clerk_user_id) return;
+    const fetchUnread = async () => {
+      const { count } = await supabase.from("messages")
+        .select("id", { count: "exact", head: true })
+        .eq("receiver_id", profile.clerk_user_id)
+        .eq("read", false);
+      setUnreadCount(count || 0);
+    };
+    fetchUnread();
+    const interval = setInterval(fetchUnread, 15000);
+    return () => clearInterval(interval);
+  }, [profile?.clerk_user_id]);
 
   const handleSearch = (value: string) => {
     setQuery(value);
@@ -153,6 +169,14 @@ export function Navbar({ profile }: NavbarProps) {
         </div>
 
         <div className="navbar-actions">
+          <button className="btn btn-icon" style={{ position: "relative" }} onClick={() => router.push("/mensajes")}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            {unreadCount > 0 && (
+              <span style={{ position: "absolute", top: 2, right: 2, minWidth: 16, height: 16, background: "#ef4444", color: "#fff", fontSize: "0.6rem", fontWeight: 700, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", border: "2px solid #fff", lineHeight: 1 }}>
+                {unreadCount > 99 ? "99+" : unreadCount}
+              </span>
+            )}
+          </button>
           <UserButton
             afterSignOutUrl="/login"
             appearance={{

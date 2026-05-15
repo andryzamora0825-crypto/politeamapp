@@ -27,6 +27,12 @@ export function ProfilePage({ profile, currentUserId }: ProfilePageProps) {
   // Friend request state
   const [friendStatus, setFriendStatus] = useState<"none" | "pending_sent" | "pending_received" | "accepted">("none");
   const [friendLoading, setFriendLoading] = useState(false);
+  // Personal info
+  const [email, setEmail] = useState(profile?.email || "");
+  const [birthday, setBirthday] = useState(profile?.birthday || "");
+  const [showEmail, setShowEmail] = useState(profile?.show_email || false);
+  const [showBirthday, setShowBirthday] = useState(profile?.show_birthday || false);
+  const [editingInfo, setEditingInfo] = useState(false);
 
   const avatarRef = useRef<HTMLInputElement>(null);
   const bannerRef = useRef<HTMLInputElement>(null);
@@ -282,6 +288,61 @@ export function ProfilePage({ profile, currentUserId }: ProfilePageProps) {
               Agrega una descripcion
             </p>
           ) : null}
+        </div>
+
+        {/* Personal info section */}
+        <div className="pp-info-section">
+          {isOwner ? (
+            <>
+              <div className="pp-info-header">
+                <span style={{ fontWeight: 600, fontSize: "0.88rem" }}>📋 Información personal</span>
+                <button className="btn btn-ghost btn-sm" onClick={() => setEditingInfo(!editingInfo)}>
+                  {editingInfo ? "Listo" : "Editar"}
+                </button>
+              </div>
+              {editingInfo ? (
+                <div className="pp-info-edit">
+                  <div className="pp-info-field">
+                    <label>📧 Correo electrónico</label>
+                    <input value={email} onChange={e => setEmail(e.target.value)} placeholder="tu@email.com" />
+                    <div className="pp-info-toggle">
+                      <span className="pp-info-toggle-label">{showEmail ? "🌍 Público" : "🔒 Solo tú"}</span>
+                      <button className={`pp-toggle ${showEmail ? "on" : ""}`} onClick={() => setShowEmail(!showEmail)}>
+                        <span className="pp-toggle-knob" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="pp-info-field">
+                    <label>🎂 Fecha de cumpleaños</label>
+                    <input type="date" value={birthday} onChange={e => setBirthday(e.target.value)} />
+                    <div className="pp-info-toggle">
+                      <span className="pp-info-toggle-label">{showBirthday ? "🌍 Público" : "🔒 Solo tú"}</span>
+                      <button className={`pp-toggle ${showBirthday ? "on" : ""}`} onClick={() => setShowBirthday(!showBirthday)}>
+                        <span className="pp-toggle-knob" />
+                      </button>
+                    </div>
+                  </div>
+                  <button className="btn btn-primary btn-sm" onClick={async () => {
+                    await supabase.from("profiles").update({ email, birthday: birthday || null, show_email: showEmail, show_birthday: showBirthday }).eq("clerk_user_id", profileId);
+                    setEditingInfo(false);
+                  }}>Guardar información</button>
+                </div>
+              ) : (
+                <div className="pp-info-display">
+                  <div className="pp-info-row-item">📧 {email || "Sin correo"} <span className="pp-info-vis-tag">{showEmail ? "🌍" : "🔒"}</span></div>
+                  <div className="pp-info-row-item">🎂 {birthday || "Sin fecha"} <span className="pp-info-vis-tag">{showBirthday ? "🌍" : "🔒"}</span></div>
+                </div>
+              )}
+            </>
+          ) : (
+            /* Visitor: only see public info */
+            (profile?.show_email || profile?.show_birthday) ? (
+              <div className="pp-info-display" style={{ padding: "10px 28px" }}>
+                {profile?.show_email && profile?.email && <div className="pp-info-row-item">📧 {profile.email}</div>}
+                {profile?.show_birthday && profile?.birthday && <div className="pp-info-row-item">🎂 {profile.birthday}</div>}
+              </div>
+            ) : null
+          )}
         </div>
 
         {/* Tabs */}

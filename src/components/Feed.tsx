@@ -25,17 +25,40 @@ export function Feed({ currentUserId, profile }: FeedProps) {
         author:profiles!posts_author_id_fkey(clerk_user_id, username, full_name, avatar_url, verified)
       `)
       .order("created_at", { ascending: false })
-      .limit(50);
+      .limit(80);
 
     if (postsData) {
+      // Get friends list for filtering
+      const { data: friendships } = await supabase.from("friendships")
+        .select("user_id, friend_id")
+        .eq("status", "accepted")
+        .or(`user_id.eq.${currentUserId},friend_id.eq.${currentUserId}`);
+      const friendIds = new Set((friendships || []).map((f: any) => f.user_id === currentUserId ? f.friend_id : f.user_id));
+
+      // Get custom visibility entries for this user
+      const { data: customVis } = await supabase.from("post_visibility")
+        .select("post_id")
+        .eq("user_id", currentUserId);
+      const customPostIds = new Set((customVis || []).map((v: any) => v.post_id));
+
+      // Get likes
       const { data: userLikes } = await supabase
         .from("likes")
         .select("post_id")
         .eq("user_id", currentUserId);
-
       const likedPostIds = new Set(userLikes?.map((l: any) => l.post_id) || []);
 
-      const enrichedPosts = postsData.map((post: any) => ({
+      // Filter by visibility
+      const visiblePosts = postsData.filter((post: any) => {
+        if (post.author_id === currentUserId) return true; // Always see own
+        if (!post.visibility || post.visibility === "public") return true;
+        if (post.visibility === "friends") return friendIds.has(post.author_id);
+        if (post.visibility === "private") return false;
+        if (post.visibility === "custom") return customPostIds.has(post.id);
+        return true;
+      });
+
+      const enrichedPosts = visiblePosts.map((post: any) => ({
         ...post,
         isLiked: likedPostIds.has(post.id),
       }));

@@ -17,6 +17,9 @@ export function Stories({ currentUserId, profile }: StoriesProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [showVisModal, setShowVisModal] = useState(false);
+  const [storyVisibility, setStoryVisibility] = useState<"public"|"friends"|"private">("public");
+  const [pendingFile, setPendingFile] = useState<File|null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<any>(null);
   const supabase = createClient();
@@ -29,9 +32,24 @@ export function Stories({ currentUserId, profile }: StoriesProps) {
       .gt("expires_at", new Date().toISOString())
       .order("created_at", { ascending: false });
 
+    // Get friends for filtering
+    const { data: friendships } = await supabase.from("friendships")
+      .select("user_id, friend_id").eq("status", "accepted")
+      .or(`user_id.eq.${currentUserId},friend_id.eq.${currentUserId}`);
+    const friendIds = new Set((friendships || []).map((f: any) => f.user_id === currentUserId ? f.friend_id : f.user_id));
+
+    // Filter by visibility
+    const visible = (data || []).filter((s: any) => {
+      if (s.author_id === currentUserId) return true;
+      if (!s.visibility || s.visibility === "public") return true;
+      if (s.visibility === "friends") return friendIds.has(s.author_id);
+      if (s.visibility === "private") return false;
+      return true;
+    });
+
     // Group by author
     const groups: any = {};
-    for (const s of data || []) {
+    for (const s of visible) {
       const uid = s.author_id;
       if (!groups[uid]) groups[uid] = { author: s.author, stories: [], author_id: uid };
       groups[uid].stories.push(s);
@@ -39,15 +57,23 @@ export function Stories({ currentUserId, profile }: StoriesProps) {
     setStories(Object.values(groups));
   };
 
-  const createStory = async (file: File) => {
+  const handleFileSelect = (file: File) => {
+    setPendingFile(file);
+    setShowVisModal(true);
+  };
+
+  const createStory = async (vis: "public"|"friends"|"private") => {
+    if (!pendingFile) return;
+    setShowVisModal(false);
     setUploading(true);
-    const ext = file.name.split(".").pop() || "jpg";
+    const ext = pendingFile.name.split(".").pop() || "jpg";
     const path = `${currentUserId}/${Date.now()}.${ext}`;
-    const { error } = await supabase.storage.from("stories").upload(path, file, { upsert: true });
-    if (error) { setUploading(false); return; }
+    const { error } = await supabase.storage.from("stories").upload(path, pendingFile, { upsert: true });
+    if (error) { setUploading(false); setPendingFile(null); return; }
     const { data: urlData } = supabase.storage.from("stories").getPublicUrl(path);
-    await supabase.from("stories").insert({ author_id: currentUserId, image_url: urlData.publicUrl });
+    await supabase.from("stories").insert({ author_id: currentUserId, image_url: urlData.publicUrl, visibility: vis });
     setUploading(false);
+    setPendingFile(null);
     fetchStories();
   };
 
@@ -122,7 +148,7 @@ export function Stories({ currentUserId, profile }: StoriesProps) {
             </div>
           </div>
           <span className="story-name">{uploading ? "Subiendo..." : "Tu historia"}</span>
-          <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) createStory(f); }} />
+          <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); }} />
         </div>
 
         {/* Stories */}
@@ -172,6 +198,35 @@ export function Stories({ currentUserId, profile }: StoriesProps) {
             {/* Nav */}
             <div className="story-viewer-nav-left" onClick={prevStory} />
             <div className="story-viewer-nav-right" onClick={nextStory} />
+          </div>
+        </div>
+      )}
+
+      {/* Story visibility picker */}
+      {showVisModal && (
+        <div className="cp-share-overlay" onClick={() => { setShowVisModal(false); setPendingFile(null); }}>
+          <div className="cp-share-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 320 }}>
+            <div className="cp-share-header">
+              <h3>¿Quién puede ver tu historia?</h3>
+              <button onClick={() => { setShowVisModal(false); setPendingFile(null); }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div style={{ padding: "8px 0" }}>
+              {([
+                { value: "public" as const, icon: "🌍", label: "Público", desc: "Todos pueden ver" },
+                { value: "friends" as const, icon: "👥", label: "Amigos", desc: "Solo tus amigos" },
+                { value: "private" as const, icon: "🔒", label: "Solo yo", desc: "Nadie más puede ver" },
+              ]).map(opt => (
+                <button key={opt.value} className="cp-vis-option" style={{ width: "100%" }} onClick={() => createStory(opt.value)}>
+                  <span className="cp-vis-icon">{opt.icon}</span>
+                  <div>
+                    <span className="cp-vis-label">{opt.label}</span>
+                    <span className="cp-vis-desc">{opt.desc}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}

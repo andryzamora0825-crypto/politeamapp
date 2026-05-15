@@ -63,7 +63,12 @@ export function PostCard({ post, currentUserId, onUpdate, onDelete }: PostCardPr
           <div className="post-author-name" onClick={goToProfile} style={{ cursor: "pointer" }}>
             <span className="verified-name">{author?.full_name || "Usuario"}{author?.verified && <VerifiedBadge />}</span>
           </div>
-          <div className="post-time">{timeAgo(post.created_at)}</div>
+          <div className="post-time">
+            {timeAgo(post.created_at)}
+            <span className="post-privacy-icon" title={post.visibility === "friends" ? "Amigos" : post.visibility === "private" ? "Privado" : post.visibility === "custom" ? "Compartido" : "Público"}>
+              {post.visibility === "friends" ? " 👥" : post.visibility === "private" ? " 🔒" : post.visibility === "custom" ? " 👤" : " 🌍"}
+            </span>
+          </div>
         </div>
         {isOwner && (
           <div style={{ position: "relative" }}>
