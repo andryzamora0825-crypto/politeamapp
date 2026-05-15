@@ -12,6 +12,7 @@ interface ProfilePageProps {
 }
 
 export function ProfilePage({ profile, currentUserId }: ProfilePageProps) {
+  const isOwner = profile?.clerk_user_id === currentUserId;
   const [avatarUrl, setAvatarUrl] = useState(profile?.avatar_url || "");
   const [bannerUrl, setBannerUrl] = useState(profile?.banner_url || "");
   const [bio, setBio] = useState(profile?.bio || "");
@@ -35,9 +36,10 @@ export function ProfilePage({ profile, currentUserId }: ProfilePageProps) {
 
   const fetchData = async () => {
     setLoading(true);
+    const profileId = profile?.clerk_user_id;
     const [postsRes, friendsRes] = await Promise.all([
-      supabase.from("posts").select("*, author:profiles!posts_author_id_fkey(clerk_user_id, username, full_name, avatar_url, verified)").eq("author_id", currentUserId).order("created_at", { ascending: false }),
-      supabase.from("friendships").select("id", { count: "exact", head: true }).eq("status", "accepted").or(`user_id.eq.${currentUserId},friend_id.eq.${currentUserId}`),
+      supabase.from("posts").select("*, author:profiles!posts_author_id_fkey(clerk_user_id, username, full_name, avatar_url, verified)").eq("author_id", profileId).order("created_at", { ascending: false }),
+      supabase.from("friendships").select("id", { count: "exact", head: true }).eq("status", "accepted").or(`user_id.eq.${profileId},friend_id.eq.${profileId}`),
     ]);
     const userLikesRes = await supabase.from("likes").select("post_id").eq("user_id", currentUserId);
     const likedIds = new Set(userLikesRes.data?.map((l: any) => l.post_id) || []);
@@ -100,11 +102,12 @@ export function ProfilePage({ profile, currentUserId }: ProfilePageProps) {
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
             </div>
           )}
-          <div className="pp-banner-actions" onClick={(e) => e.stopPropagation()}>
-            <button className="pp-action-btn" onClick={() => setShowBannerMenu(!showBannerMenu)}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-              Editar portada
-            </button>
+          {isOwner && (
+            <div className="pp-banner-actions" onClick={(e) => e.stopPropagation()}>
+              <button className="pp-action-btn" onClick={() => setShowBannerMenu(!showBannerMenu)}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                Editar portada
+              </button>
             {showBannerMenu && (
               <div className="pp-dropdown">
                 <button onClick={() => bannerRef.current?.click()}>
@@ -120,6 +123,7 @@ export function ProfilePage({ profile, currentUserId }: ProfilePageProps) {
               </div>
             )}
           </div>
+          )}
           <input ref={bannerRef} type="file" accept="image/*" hidden onChange={handleBannerUpload} />
         </div>
 
@@ -127,15 +131,17 @@ export function ProfilePage({ profile, currentUserId }: ProfilePageProps) {
         <div className="pp-info-row">
           {/* Avatar */}
           <div className="pp-avatar-wrap" onClick={(e) => e.stopPropagation()}>
-            <div className="pp-avatar" onClick={() => setShowAvatarMenu(!showAvatarMenu)}>
+            <div className="pp-avatar" onClick={() => isOwner && setShowAvatarMenu(!showAvatarMenu)}>
               {avatarUrl ? (
-                <img src={avatarUrl} alt={profile?.full_name} />
-              ) : (
-                <div className="pp-avatar-fallback">{(profile?.full_name || "U").charAt(0).toUpperCase()}</div>
-              )}
+              <img src={avatarUrl} alt={profile?.full_name} />
+            ) : (
+              <div className="pp-avatar-fallback">{(profile?.full_name || "U").charAt(0).toUpperCase()}</div>
+            )}
+            {isOwner && (
               <div className="pp-avatar-cam">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
               </div>
+            )}
             </div>
             {showAvatarMenu && (
               <div className="pp-dropdown pp-dropdown-avatar">
@@ -169,7 +175,7 @@ export function ProfilePage({ profile, currentUserId }: ProfilePageProps) {
 
           {/* Actions */}
           <div className="pp-header-actions">
-            {editingBio ? null : (
+            {isOwner && !editingBio && (
               <button className="btn btn-ghost btn-sm" onClick={() => setEditingBio(true)}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                 Editar perfil
@@ -184,7 +190,7 @@ export function ProfilePage({ profile, currentUserId }: ProfilePageProps) {
 
         {/* Bio inside card */}
         <div className="pp-bio-area">
-          {editingBio ? (
+          {isOwner && editingBio ? (
             <div className="pp-bio-edit">
               <textarea value={bio} onChange={(e) => setBio(e.target.value)} placeholder="Escribe algo sobre ti..." rows={2} maxLength={300} />
               <div className="pp-bio-edit-actions">
