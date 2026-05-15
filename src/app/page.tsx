@@ -5,6 +5,7 @@ import { Navbar } from "@/components/Navbar";
 import { Feed } from "@/components/Feed";
 import { ProfileSidebar } from "@/components/ProfileSidebar";
 import { FriendsSidebar } from "@/components/FriendsSidebar";
+import { MobileNav } from "@/components/MobileNav";
 
 export default async function HomePage() {
   const { userId } = await auth();
@@ -48,6 +49,7 @@ export default async function HomePage() {
           <FriendsSidebar currentUserId={userId} />
         </aside>
       </main>
+      <MobileNav profile={profile} />
     </>
   );
 }

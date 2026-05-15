@@ -4,6 +4,7 @@ import { createClient } from "@/utils/supabase/server";
 import { Navbar } from "@/components/Navbar";
 import { ProfileSidebar } from "@/components/ProfileSidebar";
 import { ChatPage } from "@/components/chat/ChatPage";
+import { MobileNav } from "@/components/MobileNav";
 
 export default async function MensajesPage() {
   const { userId } = await auth();
@@ -43,6 +44,7 @@ export default async function MensajesPage() {
           <ChatPage currentUserId={userId} profile={profile} />
         </section>
       </main>
+      <MobileNav profile={profile} />
     </>
   );
 }

@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import { Navbar } from "@/components/Navbar";
 import { ProfilePage } from "@/components/ProfilePage";
+import { MobileNav } from "@/components/MobileNav";
 
 export default async function PerfilPage() {
   const { userId } = await auth();
@@ -35,6 +36,7 @@ export default async function PerfilPage() {
     <>
       <Navbar profile={profile} />
       <ProfilePage profile={profile} currentUserId={userId} />
+      <MobileNav profile={profile} />
     </>
   );
 }

@@ -4,6 +4,7 @@ import { createClient } from "@/utils/supabase/server";
 import { Navbar } from "@/components/Navbar";
 import { ProfileSidebar } from "@/components/ProfileSidebar";
 import { LivePage } from "@/components/live/LivePage";
+import { MobileNav } from "@/components/MobileNav";
 
 export default async function LivesRoute() {
   const { userId } = await auth();
@@ -43,6 +44,7 @@ export default async function LivesRoute() {
           <LivePage currentUserId={userId} profile={profile} />
         </section>
       </main>
+      <MobileNav profile={profile} />
     </>
   );
 }
