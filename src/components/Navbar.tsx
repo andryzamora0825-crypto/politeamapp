@@ -1,6 +1,7 @@
 /* eslint-disable */
 "use client";
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { createClient } from "@/utils/supabase/client";
 import { UserAvatar } from "./UserAvatar";
@@ -11,6 +12,7 @@ interface NavbarProps {
 }
 
 export function Navbar({ profile }: NavbarProps) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<{ users: any[]; posts: any[] }>({ users: [], posts: [] });
   const [showResults, setShowResults] = useState(false);
@@ -120,7 +122,7 @@ export function Navbar({ profile }: NavbarProps) {
                     <div className="search-section">
                       <div className="search-section-title">Usuarios</div>
                       {results.users.map((u) => (
-                        <div key={u.clerk_user_id} className="search-result-item">
+                        <div key={u.clerk_user_id} className="search-result-item" onClick={() => { router.push(`/perfil/${u.username}`); setShowResults(false); setQuery(""); }} style={{ cursor: 'pointer' }}>
                           <UserAvatar src={u.avatar_url} name={u.full_name} size="sm" />
                           <div className="search-result-info">
                             <span className="search-result-name"><span className="verified-name">{highlightMatch(u.full_name, query)}{u.verified && <VerifiedBadge size={14} />}</span></span>

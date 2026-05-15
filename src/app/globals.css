@@ -803,6 +803,9 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 .lr-chat-input { flex: 1; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius-full); padding: 8px 14px; color: #fff; font-size: 0.85rem; outline: none; }
 .lr-chat-input::placeholder { color: rgba(255,255,255,0.35); }
 .lr-chat-input:focus { border-color: var(--accent); }
+.lr-viewer-status { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 16px; padding: 20px; background: rgba(14,165,233,0.08); border-radius: var(--radius-lg); border: 1px solid rgba(14,165,233,0.15); }
+.lr-viewer-status-icon { font-size: 2.5rem; animation: pulse 2s infinite; }
+.lr-viewer-status p { font-size: 1rem; font-weight: 600; color: rgba(255,255,255,0.9); margin: 0; }
 .lr-chat-send { color: var(--accent); }
 .lr-chat-send:disabled { opacity: 0.3; }
 

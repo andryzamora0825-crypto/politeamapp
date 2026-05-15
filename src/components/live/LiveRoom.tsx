@@ -39,6 +39,8 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
   const chatEndRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream|null>(null);
   const screenStreamRef = useRef<MediaStream|null>(null);
+  const broadcastRef = useRef<any>(null);
+  const [creatorMode, setCreatorMode] = useState<string>("idle"); // idle, camera, screen, whiteboard, camera+whiteboard
   const supabase = createClient();
 
   // Join room
@@ -67,7 +69,40 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
         setLikesCount(p.new.likes_count || 0);
       })
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+
+    // Broadcast channel for whiteboard sync + mode
+    const bc = supabase.channel(`live-board-${live.id}`);
+    bc.on('broadcast', { event: 'stroke' }, ({ payload }) => {
+      if (!isCreator && canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        if (ctx && payload) {
+          ctx.strokeStyle = payload.color;
+          ctx.lineWidth = payload.size;
+          ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+          ctx.beginPath();
+          ctx.moveTo(payload.from.x, payload.from.y);
+          ctx.lineTo(payload.to.x, payload.to.y);
+          ctx.stroke();
+        }
+      }
+    }).on('broadcast', { event: 'clear' }, () => {
+      if (!isCreator && canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        if (ctx) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height); }
+      }
+      if (!isCreator) setTextItems([]);
+    }).on('broadcast', { event: 'text_sync' }, ({ payload }) => {
+      if (!isCreator) setTextItems(payload || []);
+    }).on('broadcast', { event: 'mode' }, ({ payload }) => {
+      if (!isCreator) {
+        setCreatorMode(payload.mode);
+        if (payload.mode.includes('whiteboard')) setShowWhiteboard(true);
+        else setShowWhiteboard(false);
+      }
+    }).subscribe();
+    broadcastRef.current = bc;
+
+    return () => { supabase.removeChannel(ch); supabase.removeChannel(bc); };
   }, []);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -81,17 +116,31 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     videoRef.current = el;
     if (el && streamRef.current) { el.srcObject = streamRef.current; }
   }, []);
+  // Broadcast mode helper
+  const broadcastMode = (cam: boolean, scr: boolean, wb: boolean) => {
+    let mode = 'idle';
+    if (wb && cam) mode = 'camera+whiteboard';
+    else if (wb) mode = 'whiteboard';
+    else if (scr && cam) mode = 'camera+screen';
+    else if (scr) mode = 'screen';
+    else if (cam) mode = 'camera';
+    setCreatorMode(mode);
+    broadcastRef.current?.send({ type: 'broadcast', event: 'mode', payload: { mode } });
+  };
+
   useEffect(() => {
     if (cameraOn && isCreator) {
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         .then((s) => {
           streamRef.current = s;
           if (videoRef.current) videoRef.current.srcObject = s;
+          broadcastMode(true, screenOn, showWhiteboard);
         })
         .catch(() => setCameraOn(false));
     } else if (!cameraOn) {
       if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
       if (videoRef.current) videoRef.current.srcObject = null;
+      if (isCreator) broadcastMode(false, screenOn, showWhiteboard);
     }
   }, [cameraOn]);
 
@@ -107,11 +156,13 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
           screenStreamRef.current = s;
           if (screenRef.current) screenRef.current.srcObject = s;
           s.getVideoTracks()[0].onended = () => setScreenOn(false);
+          broadcastMode(cameraOn, true, showWhiteboard);
         })
         .catch(() => setScreenOn(false));
     } else if (!screenOn) {
       if (screenStreamRef.current) { screenStreamRef.current.getTracks().forEach(t => t.stop()); screenStreamRef.current = null; }
       if (screenRef.current) screenRef.current.srcObject = null;
+      if (isCreator) broadcastMode(cameraOn, false, showWhiteboard);
     }
   }, [screenOn]);
 
@@ -174,19 +225,23 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     const r = canvasRef.current!.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   };
+  const lastPosRef = useRef<{x:number;y:number}|null>(null);
   const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isCreator) return;
     if (tool === "text") {
       const pos = getPos(e);
       const id = Date.now();
-      setTextItems(prev => [...prev, { id, x: pos.x, y: pos.y, text: "Texto", color: penColor }]);
+      const newItems = [...textItems, { id, x: pos.x, y: pos.y, text: "Texto", color: penColor }];
+      setTextItems(newItems);
       setEditingText(id);
+      broadcastRef.current?.send({ type: 'broadcast', event: 'text_sync', payload: newItems });
       return;
     }
     const ctx = canvasRef.current?.getContext("2d");
     if (!ctx) return;
     setIsDrawing(true);
     const pos = getPos(e);
+    lastPosRef.current = pos;
     ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
   };
   const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -194,17 +249,25 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     const ctx = canvasRef.current?.getContext("2d");
     if (!ctx) return;
     const pos = getPos(e);
+    const color = tool === "eraser" ? "#ffffff" : penColor;
+    const size = tool === "eraser" ? 20 : penSize;
     ctx.lineTo(pos.x, pos.y);
-    ctx.strokeStyle = tool === "eraser" ? "#ffffff" : penColor;
-    ctx.lineWidth = tool === "eraser" ? 20 : penSize;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = size;
     ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
+    // Broadcast stroke
+    if (lastPosRef.current) {
+      broadcastRef.current?.send({ type: 'broadcast', event: 'stroke', payload: { from: lastPosRef.current, to: pos, color, size } });
+    }
+    lastPosRef.current = pos;
   };
-  const stopDraw = () => setIsDrawing(false);
+  const stopDraw = () => { setIsDrawing(false); lastPosRef.current = null; };
   const clearCanvas = () => {
     const c = canvasRef.current; if (!c) return;
     const ctx = c.getContext("2d");
     if (ctx) { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height); }
     setTextItems([]);
+    broadcastRef.current?.send({ type: 'broadcast', event: 'clear', payload: {} });
   };
 
   // Text drag
@@ -215,7 +278,11 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     const onMove = (ev: MouseEvent) => {
       const wb = canvasRef.current?.parentElement?.getBoundingClientRect();
       if (!wb) return;
-      setTextItems(prev => prev.map(t => t.id === id ? { ...t, x: ev.clientX - wb.left, y: ev.clientY - wb.top } : t));
+      setTextItems(prev => {
+        const next = prev.map(t => t.id === id ? { ...t, x: ev.clientX - wb.left, y: ev.clientY - wb.top } : t);
+        broadcastRef.current?.send({ type: 'broadcast', event: 'text_sync', payload: next });
+        return next;
+      });
     };
     const onUp = () => { setDraggingText(null); window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
     window.addEventListener("mousemove", onMove);
@@ -266,7 +333,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
                   </select>
                   <button className="lr-wb-tool" onClick={clearCanvas} title="Limpiar">🗑️</button>
                   <div className="lr-wb-divider" />
-                  <button className="lr-wb-tool lr-wb-close" onClick={() => setShowWhiteboard(false)} title="Cerrar pizarra">✕</button>
+                  <button className="lr-wb-tool lr-wb-close" onClick={() => { setShowWhiteboard(false); broadcastMode(cameraOn, screenOn, false); }} title="Cerrar pizarra">✕</button>
                 </div>
               )}
               {!isCreator && (
@@ -311,7 +378,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
             </div>
           )}
 
-          {/* Nothing on */}
+          {/* Nothing on — show viewer status */}
           {!showWhiteboard && !screenOn && !cameraOn && (
             <div className="lr-video-area">
               <div className="lr-no-video">
@@ -320,6 +387,28 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
                 {live.description && <p>{live.description}</p>}
                 {!isLive && <span className="lr-replay-badge">Clase finalizada</span>}
                 {isLive && isCreator && <p className="lr-hint">Activa la cámara, pizarra o pantalla desde los controles</p>}
+                {isLive && !isCreator && creatorMode === 'idle' && <p className="lr-hint">Esperando que el profesor inicie la transmisión...</p>}
+                {isLive && !isCreator && creatorMode === 'camera' && (
+                  <div className="lr-viewer-status">
+                    <span className="lr-viewer-status-icon">📹</span>
+                    <p>El profesor está transmitiendo por cámara</p>
+                    <span className="lr-hint">La transmisión de video en vivo requiere WebRTC (próximamente)</span>
+                  </div>
+                )}
+                {isLive && !isCreator && creatorMode === 'screen' && (
+                  <div className="lr-viewer-status">
+                    <span className="lr-viewer-status-icon">🖥️</span>
+                    <p>El profesor está compartiendo su pantalla</p>
+                    <span className="lr-hint">La transmisión de pantalla en vivo requiere WebRTC (próximamente)</span>
+                  </div>
+                )}
+                {isLive && !isCreator && (creatorMode === 'camera+screen') && (
+                  <div className="lr-viewer-status">
+                    <span className="lr-viewer-status-icon">📹🖥️</span>
+                    <p>El profesor está transmitiendo cámara + pantalla</p>
+                    <span className="lr-hint">La transmisión de video en vivo requiere WebRTC (próximamente)</span>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -332,7 +421,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
             <>
               <button className={`lr-ctrl-btn ${cameraOn ? "lr-ctrl-on" : ""}`} onClick={() => setCameraOn(!cameraOn)}>📹 Cámara</button>
               <button className={`lr-ctrl-btn ${screenOn ? "lr-ctrl-on" : ""}`} onClick={() => setScreenOn(!screenOn)}>🖥️ Pantalla</button>
-              <button className={`lr-ctrl-btn ${showWhiteboard ? "lr-ctrl-on" : ""}`} onClick={() => setShowWhiteboard(!showWhiteboard)}>📝 Pizarra</button>
+              <button className={`lr-ctrl-btn ${showWhiteboard ? "lr-ctrl-on" : ""}`} onClick={() => { const next = !showWhiteboard; setShowWhiteboard(next); broadcastMode(cameraOn, screenOn, next); }}>📝 Pizarra</button>
             </>
           )}
           <button className={`lr-ctrl-btn ${liked ? "lr-ctrl-liked" : ""}`} onClick={toggleLike}>
