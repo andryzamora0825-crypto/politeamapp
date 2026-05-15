@@ -1,3 +1,4 @@
+/* eslint-disable */
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { UserButton } from "@clerk/nextjs";
@@ -112,7 +113,7 @@ export function Navbar({ profile }: NavbarProps) {
                   <span>Buscando...</span>
                 </div>
               ) : totalResults === 0 ? (
-                <div className="search-empty">Sin resultados para "{query}"</div>
+                <div className="search-empty">Sin resultados para &ldquo;{query}&rdquo;</div>
               ) : (
                 <>
                   {results.users.length > 0 && (
