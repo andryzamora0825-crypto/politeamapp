@@ -26,14 +26,19 @@ ALTER TABLE profiles ADD COLUMN IF NOT EXISTS birthday date;
 -- 5. RLS for post_visibility
 ALTER TABLE post_visibility ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can manage their post visibility" ON post_visibility;
 CREATE POLICY "Users can manage their post visibility" ON post_visibility
   FOR ALL USING (
     EXISTS (SELECT 1 FROM posts WHERE posts.id = post_visibility.post_id AND posts.author_id = auth.uid()::text)
   );
 
+DROP POLICY IF EXISTS "Users can see posts shared with them" ON post_visibility;
 CREATE POLICY "Users can see posts shared with them" ON post_visibility
   FOR SELECT USING (user_id = auth.uid()::text);
 
 -- Allow anon/service for now (same pattern as other tables)
+DROP POLICY IF EXISTS "anon_post_visibility" ON post_visibility;
 CREATE POLICY "anon_post_visibility" ON post_visibility FOR ALL TO anon USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "service_post_visibility" ON post_visibility;
 CREATE POLICY "service_post_visibility" ON post_visibility FOR ALL TO service_role USING (true) WITH CHECK (true);

@@ -44,6 +44,12 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
   const [floatingHearts, setFloatingHearts] = useState<{id:number;x:number;y:number}[]>([]);
   const lastTapRef = useRef<number>(0);
   const heartIdRef = useRef(0);
+  // WebRTC
+  const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const peerRef = useRef<RTCPeerConnection|null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream|null>(null);
+  const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }] };
   const supabase = createClient();
 
   // Join room
@@ -102,10 +108,82 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
         if (payload.mode.includes('whiteboard')) setShowWhiteboard(true);
         else setShowWhiteboard(false);
       }
+    }).on('broadcast', { event: 'request_mode' }, () => {
+      if (isCreator) {
+        let mode = 'idle';
+        if (showWhiteboard && cameraOn) mode = 'camera+whiteboard';
+        else if (showWhiteboard) mode = 'whiteboard';
+        else if (screenOn && cameraOn) mode = 'camera+screen';
+        else if (screenOn) mode = 'screen';
+        else if (cameraOn) mode = 'camera';
+        bc.send({ type: 'broadcast', event: 'mode', payload: { mode } });
+      }
+    // WebRTC signaling
+    }).on('broadcast', { event: 'viewer_join' }, ({ payload }) => {
+      if (!isCreator) return;
+      const viewerId = payload.viewerId;
+      if (peersRef.current.has(viewerId)) return;
+      const pc = new RTCPeerConnection(rtcConfig);
+      peersRef.current.set(viewerId, pc);
+      // Add current tracks
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => pc.addTrack(t, streamRef.current!));
+      if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach(t => pc.addTrack(t, screenStreamRef.current!));
+      pc.onicecandidate = (e) => { if (e.candidate) bc.send({ type: 'broadcast', event: 'ice_candidate', payload: { candidate: e.candidate, from: currentUserId, target: viewerId } }); };
+      pc.createOffer().then(offer => pc.setLocalDescription(offer).then(() => {
+        bc.send({ type: 'broadcast', event: 'offer', payload: { sdp: pc.localDescription, target: viewerId, from: currentUserId } });
+      }));
+    }).on('broadcast', { event: 'answer' }, ({ payload }) => {
+      if (!isCreator || payload.target !== currentUserId) return;
+      const pc = peersRef.current.get(payload.from);
+      if (pc) pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+    }).on('broadcast', { event: 'offer' }, ({ payload }) => {
+      if (isCreator || payload.target !== currentUserId) return;
+      if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
+      const pc = new RTCPeerConnection(rtcConfig);
+      peerRef.current = pc;
+      const rs = new MediaStream();
+      setRemoteStream(rs);
+      pc.ontrack = (e) => { e.streams[0]?.getTracks().forEach(t => rs.addTrack(t)); if (remoteVideoRef.current) remoteVideoRef.current.srcObject = rs; };
+      pc.onicecandidate = (e) => { if (e.candidate) bc.send({ type: 'broadcast', event: 'ice_candidate', payload: { candidate: e.candidate, from: currentUserId, target: payload.from } }); };
+      pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
+        .then(() => pc.createAnswer())
+        .then(answer => pc.setLocalDescription(answer))
+        .then(() => { bc.send({ type: 'broadcast', event: 'answer', payload: { sdp: pc.localDescription, target: payload.from, from: currentUserId } }); });
+    }).on('broadcast', { event: 'ice_candidate' }, ({ payload }) => {
+      if (payload.target !== currentUserId) return;
+      const pc = isCreator ? peersRef.current.get(payload.from) : peerRef.current;
+      if (pc) pc.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch(() => {});
     }).subscribe();
     broadcastRef.current = bc;
 
-    return () => { supabase.removeChannel(ch); supabase.removeChannel(bc); };
+    // Viewer: request mode + WebRTC connection
+    if (!isCreator) {
+      setTimeout(() => {
+        bc.send({ type: 'broadcast', event: 'request_mode', payload: {} });
+        bc.send({ type: 'broadcast', event: 'viewer_join', payload: { viewerId: currentUserId } });
+      }, 500);
+    }
+
+    // Creator: periodic mode broadcast
+    let modeInterval: any = null;
+    if (isCreator) {
+      modeInterval = setInterval(() => {
+        let mode = 'idle';
+        if (showWhiteboard && cameraOn) mode = 'camera+whiteboard';
+        else if (showWhiteboard) mode = 'whiteboard';
+        else if (screenOn && cameraOn) mode = 'camera+screen';
+        else if (screenOn) mode = 'screen';
+        else if (cameraOn) mode = 'camera';
+        bc.send({ type: 'broadcast', event: 'mode', payload: { mode } });
+      }, 5000);
+    }
+
+    return () => {
+      supabase.removeChannel(ch); supabase.removeChannel(bc);
+      if (modeInterval) clearInterval(modeInterval);
+      peersRef.current.forEach(pc => pc.close()); peersRef.current.clear();
+      if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
+    };
   }, []);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -113,6 +191,13 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
   useEffect(() => {
     supabase.from("live_likes").select("id").eq("live_id", live.id).eq("user_id", currentUserId).single().then(({ data }) => { if (data) setLiked(true); });
   }, []);
+
+  // Bind remote stream to video
+  useEffect(() => {
+    if (remoteVideoRef.current && remoteStream) {
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream, creatorMode]);
 
   // Camera
   const attachCamera = useCallback((el: HTMLVideoElement | null) => {
@@ -131,12 +216,25 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     broadcastRef.current?.send({ type: 'broadcast', event: 'mode', payload: { mode } });
   };
 
+  // Add tracks to all existing WebRTC peers
+  const addTracksToPeers = (stream: MediaStream) => {
+    peersRef.current.forEach((pc) => {
+      stream.getTracks().forEach(track => {
+        const senders = pc.getSenders();
+        const existing = senders.find(s => s.track?.kind === track.kind);
+        if (existing) existing.replaceTrack(track);
+        else pc.addTrack(track, stream);
+      });
+    });
+  };
+
   useEffect(() => {
     if (cameraOn && isCreator) {
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         .then((s) => {
           streamRef.current = s;
           if (videoRef.current) videoRef.current.srcObject = s;
+          addTracksToPeers(s);
           broadcastMode(true, screenOn, showWhiteboard);
         })
         .catch(() => setCameraOn(false));
@@ -159,6 +257,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
           screenStreamRef.current = s;
           if (screenRef.current) screenRef.current.srcObject = s;
           s.getVideoTracks()[0].onended = () => setScreenOn(false);
+          addTracksToPeers(s);
           broadcastMode(cameraOn, true, showWhiteboard);
         })
         .catch(() => setScreenOn(false));
@@ -228,6 +327,11 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     const r = canvasRef.current!.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   };
+  const getTouchPos = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    const r = canvasRef.current!.getBoundingClientRect();
+    const t = e.touches[0];
+    return { x: t.clientX - r.left, y: t.clientY - r.top };
+  };
   const lastPosRef = useRef<{x:number;y:number}|null>(null);
   const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isCreator) return;
@@ -258,13 +362,41 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     ctx.strokeStyle = color;
     ctx.lineWidth = size;
     ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
-    // Broadcast stroke
     if (lastPosRef.current) {
       broadcastRef.current?.send({ type: 'broadcast', event: 'stroke', payload: { from: lastPosRef.current, to: pos, color, size } });
     }
     lastPosRef.current = pos;
   };
   const stopDraw = () => { setIsDrawing(false); lastPosRef.current = null; };
+
+  // Touch handlers for mobile whiteboard
+  const touchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isCreator) return;
+    e.preventDefault();
+    const ctx = canvasRef.current?.getContext("2d");
+    if (!ctx) return;
+    setIsDrawing(true);
+    const pos = getTouchPos(e);
+    lastPosRef.current = pos;
+    ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
+  };
+  const touchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isDrawing || !isCreator) return;
+    e.preventDefault();
+    const ctx = canvasRef.current?.getContext("2d");
+    if (!ctx) return;
+    const pos = getTouchPos(e);
+    const color = tool === "eraser" ? "#ffffff" : penColor;
+    const size = tool === "eraser" ? 20 : penSize;
+    ctx.lineTo(pos.x, pos.y);
+    ctx.strokeStyle = color; ctx.lineWidth = size;
+    ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
+    if (lastPosRef.current) {
+      broadcastRef.current?.send({ type: 'broadcast', event: 'stroke', payload: { from: lastPosRef.current, to: pos, color, size } });
+    }
+    lastPosRef.current = pos;
+  };
+  const touchEnd = () => { setIsDrawing(false); lastPosRef.current = null; };
   const clearCanvas = () => {
     const c = canvasRef.current; if (!c) return;
     const ctx = c.getContext("2d");
@@ -364,7 +496,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
                 </div>
               )}
               <div style={{ position: "relative", flex: 1 }}>
-                <canvas ref={canvasRef} className="lr-wb-canvas" onMouseDown={startDraw} onMouseMove={draw} onMouseUp={stopDraw} onMouseLeave={stopDraw} style={{ cursor: isCreator ? (tool === "text" ? "text" : tool === "eraser" ? "cell" : "crosshair") : "default" }} />
+                <canvas ref={canvasRef} className="lr-wb-canvas" onMouseDown={startDraw} onMouseMove={draw} onMouseUp={stopDraw} onMouseLeave={stopDraw} onTouchStart={touchStart} onTouchMove={touchMove} onTouchEnd={touchEnd} style={{ cursor: isCreator ? (tool === "text" ? "text" : tool === "eraser" ? "cell" : "crosshair") : "default", touchAction: "none" }} />
                 {textItems.map(t => (
                   <div key={t.id} className="lr-wb-text-item" style={{ left: t.x, top: t.y, color: t.color, cursor: isCreator ? "move" : "default" }} onMouseDown={(e) => startDragText(t.id, e)} onDoubleClick={() => isCreator && setEditingText(t.id)}>
                     {editingText === t.id ? (
@@ -382,7 +514,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
           )}
 
           {/* Screen share (main view, no whiteboard) */}
-          {!showWhiteboard && screenOn && (
+          {!showWhiteboard && screenOn && isCreator && (
             <div className="lr-video-area">
               <video ref={attachScreen} autoPlay playsInline className="lr-video lr-screen-video" />
               {cameraOn && (
@@ -393,15 +525,29 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
             </div>
           )}
 
-          {/* Camera only (no whiteboard, no screen) */}
-          {!showWhiteboard && !screenOn && cameraOn && (
+          {/* Camera only (no whiteboard, no screen) - creator */}
+          {!showWhiteboard && !screenOn && cameraOn && isCreator && (
             <div className="lr-video-area">
               <video ref={attachCamera} autoPlay muted playsInline className="lr-video" />
             </div>
           )}
 
-          {/* Nothing on — show viewer status */}
-          {!showWhiteboard && !screenOn && !cameraOn && (
+          {/* Viewer: show WebRTC remote stream */}
+          {!isCreator && !showWhiteboard && (creatorMode === 'camera' || creatorMode === 'screen' || creatorMode === 'camera+screen') && (
+            <div className="lr-video-area">
+              {remoteStream ? (
+                <video ref={remoteVideoRef} autoPlay playsInline className="lr-video" style={{ objectFit: creatorMode.includes('screen') ? 'contain' : 'cover' }} />
+              ) : (
+                <div className="lr-no-video">
+                  <div className="search-spinner" />
+                  <p className="lr-hint">Conectando stream...</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Nothing on — show idle status */}
+          {!showWhiteboard && ((isCreator && !screenOn && !cameraOn) || (!isCreator && (creatorMode === 'idle' || (!creatorMode)))) && (
             <div className="lr-video-area">
               <div className="lr-no-video">
                 <UserAvatar src={live.creator?.avatar_url} name={live.creator?.full_name || "U"} size="xl" />
@@ -409,28 +555,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
                 {live.description && <p>{live.description}</p>}
                 {!isLive && <span className="lr-replay-badge">Clase finalizada</span>}
                 {isLive && isCreator && <p className="lr-hint">Activa la cámara, pizarra o pantalla desde los controles</p>}
-                {isLive && !isCreator && creatorMode === 'idle' && <p className="lr-hint">Esperando que el profesor inicie la transmisión...</p>}
-                {isLive && !isCreator && creatorMode === 'camera' && (
-                  <div className="lr-viewer-status">
-                    <span className="lr-viewer-status-icon">📹</span>
-                    <p>El profesor está transmitiendo por cámara</p>
-                    <span className="lr-hint">La transmisión de video en vivo requiere WebRTC (próximamente)</span>
-                  </div>
-                )}
-                {isLive && !isCreator && creatorMode === 'screen' && (
-                  <div className="lr-viewer-status">
-                    <span className="lr-viewer-status-icon">🖥️</span>
-                    <p>El profesor está compartiendo su pantalla</p>
-                    <span className="lr-hint">La transmisión de pantalla en vivo requiere WebRTC (próximamente)</span>
-                  </div>
-                )}
-                {isLive && !isCreator && (creatorMode === 'camera+screen') && (
-                  <div className="lr-viewer-status">
-                    <span className="lr-viewer-status-icon">📹🖥️</span>
-                    <p>El profesor está transmitiendo cámara + pantalla</p>
-                    <span className="lr-hint">La transmisión de video en vivo requiere WebRTC (próximamente)</span>
-                  </div>
-                )}
+                {isLive && !isCreator && <p className="lr-hint">Esperando que el profesor inicie la transmisión...</p>}
               </div>
             </div>
           )}
