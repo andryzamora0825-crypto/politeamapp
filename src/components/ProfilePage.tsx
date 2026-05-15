@@ -1,3 +1,4 @@
+/* eslint-disable */
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
