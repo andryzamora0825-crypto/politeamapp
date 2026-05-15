@@ -54,6 +54,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
   const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const peerRef = useRef<RTCPeerConnection|null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const remotePipRef = useRef<HTMLVideoElement>(null); // PIP camera for viewer
   const [remoteStream, setRemoteStream] = useState<MediaStream|null>(null);
   const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }] };
   const supabase = createClient();
@@ -230,10 +231,13 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     supabase.from("live_likes").select("id").eq("live_id", live.id).eq("user_id", currentUserId).single().then(({ data }) => { if (data) setLiked(true); });
   }, []);
 
-  // Bind remote stream to video
+  // Bind remote stream to main video and PIP
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
       remoteVideoRef.current.srcObject = remoteStream;
+    }
+    if (remotePipRef.current && remoteStream) {
+      remotePipRef.current.srcObject = remoteStream;
     }
   }, [remoteStream, creatorMode]);
 
@@ -273,11 +277,30 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
 
   useEffect(() => {
     if (cameraOn && isCreator) {
-      navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 },
+          facingMode: 'user'
+        },
+        audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 }
+      })
         .then((s) => {
           streamRef.current = s;
           if (videoRef.current) videoRef.current.srcObject = s;
           addTracksToPeers(s);
+          // Boost bitrate for quality
+          peersRef.current.forEach(pc => {
+            pc.getSenders().filter(s => s.track?.kind === 'video').forEach(sender => {
+              const params = sender.getParameters();
+              if (params.encodings?.length) {
+                params.encodings[0].maxBitrate = 2_500_000; // 2.5 Mbps
+                params.encodings[0].scaleResolutionDownBy = 1.0;
+              } else { params.encodings = [{ maxBitrate: 2_500_000 }]; }
+              sender.setParameters(params).catch(() => {});
+            });
+          });
           broadcastMode(true, screenOn, showWhiteboard);
         })
         .catch(() => setCameraOn(false));
@@ -295,12 +318,25 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
   }, []);
   useEffect(() => {
     if (screenOn && isCreator) {
-      navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
+      navigator.mediaDevices.getDisplayMedia({
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+        audio: false
+      })
         .then((s) => {
           screenStreamRef.current = s;
           if (screenRef.current) screenRef.current.srcObject = s;
           s.getVideoTracks()[0].onended = () => setScreenOn(false);
           addTracksToPeers(s);
+          // Boost screen share bitrate
+          peersRef.current.forEach(pc => {
+            pc.getSenders().filter(s => s.track?.kind === 'video').forEach(sender => {
+              const params = sender.getParameters();
+              if (params.encodings?.length) {
+                params.encodings[0].maxBitrate = 4_000_000; // 4 Mbps
+              } else { params.encodings = [{ maxBitrate: 4_000_000 }]; }
+              sender.setParameters(params).catch(() => {});
+            });
+          });
           broadcastMode(cameraOn, true, showWhiteboard);
         })
         .catch(() => setScreenOn(false));
@@ -548,9 +584,14 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
                   </div>
                 ))}
               </div>
-              {cameraOn && (
+              {cameraOn && isCreator && (
                 <div className="lr-pip">
-                  <video ref={attachCamera} autoPlay muted playsInline className="lr-pip-video" />
+                  <video ref={attachCamera} autoPlay muted playsInline className="lr-pip-video lr-mirror" />
+                </div>
+              )}
+              {!isCreator && creatorMode.includes('camera') && remoteStream && (
+                <div className="lr-pip lr-pip-right">
+                  <video ref={remotePipRef} autoPlay playsInline className="lr-pip-video" />
                 </div>
               )}
             </div>
@@ -562,7 +603,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
               <video ref={attachScreen} autoPlay playsInline className="lr-video lr-screen-video" />
               {cameraOn && (
                 <div className="lr-pip">
-                  <video ref={attachCamera} autoPlay muted playsInline className="lr-pip-video" />
+                  <video ref={attachCamera} autoPlay muted playsInline className="lr-pip-video lr-mirror" />
                 </div>
               )}
             </div>
@@ -571,7 +612,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
           {/* Camera only (no whiteboard, no screen) - creator */}
           {!showWhiteboard && !screenOn && cameraOn && isCreator && (
             <div className="lr-video-area">
-              <video ref={attachCamera} autoPlay muted playsInline className="lr-video" />
+              <video ref={attachCamera} autoPlay muted playsInline className="lr-video lr-mirror" />
             </div>
           )}
 
