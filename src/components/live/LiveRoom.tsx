@@ -24,6 +24,12 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
   const [cameraOn, setCameraOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
 
+  // Refs to track current state inside broadcast closures (avoid stale closure bug)
+  const cameraOnRef = useRef(false);
+  const screenOnRef = useRef(false);
+  const whiteboardOnRef = useRef(false);
+  const creatorModeRef = useRef("idle");
+
   // Whiteboard
   const [tool, setTool] = useState<Tool>("pen");
   const [penColor, setPenColor] = useState("#1a2332");
@@ -110,45 +116,74 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
       }
     }).on('broadcast', { event: 'request_mode' }, () => {
       if (isCreator) {
-        let mode = 'idle';
-        if (showWhiteboard && cameraOn) mode = 'camera+whiteboard';
-        else if (showWhiteboard) mode = 'whiteboard';
-        else if (screenOn && cameraOn) mode = 'camera+screen';
-        else if (screenOn) mode = 'screen';
-        else if (cameraOn) mode = 'camera';
+        // Use refs — state is stale inside this closure
+        const mode = creatorModeRef.current;
         bc.send({ type: 'broadcast', event: 'mode', payload: { mode } });
       }
     // WebRTC signaling
     }).on('broadcast', { event: 'viewer_join' }, ({ payload }) => {
       if (!isCreator) return;
       const viewerId = payload.viewerId;
-      if (peersRef.current.has(viewerId)) return;
+      // Close and recreate if already exists (viewer reconnect)
+      if (peersRef.current.has(viewerId)) {
+        peersRef.current.get(viewerId)?.close();
+        peersRef.current.delete(viewerId);
+      }
       const pc = new RTCPeerConnection(rtcConfig);
       peersRef.current.set(viewerId, pc);
       // Add current tracks
       if (streamRef.current) streamRef.current.getTracks().forEach(t => pc.addTrack(t, streamRef.current!));
       if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach(t => pc.addTrack(t, screenStreamRef.current!));
       pc.onicecandidate = (e) => { if (e.candidate) bc.send({ type: 'broadcast', event: 'ice_candidate', payload: { candidate: e.candidate, from: currentUserId, target: viewerId } }); };
-      pc.createOffer().then(offer => pc.setLocalDescription(offer).then(() => {
-        bc.send({ type: 'broadcast', event: 'offer', payload: { sdp: pc.localDescription, target: viewerId, from: currentUserId } });
-      }));
+      // onnegotiationneeded fires automatically after addTrack — handles both initial offer and renegotiation
+      let isNegotiating = false;
+      pc.onnegotiationneeded = async () => {
+        if (isNegotiating) return;
+        isNegotiating = true;
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          bc.send({ type: 'broadcast', event: 'offer', payload: { sdp: pc.localDescription, target: viewerId, from: currentUserId } });
+        } catch (e) { /* ignore if connection closed */ }
+        finally { isNegotiating = false; }
+      };
+      // If no tracks yet, onnegotiationneeded won't fire — send an initial offer manually
+      if (!streamRef.current && !screenStreamRef.current) {
+        pc.createOffer().then(offer => pc.setLocalDescription(offer)).then(() => {
+          bc.send({ type: 'broadcast', event: 'offer', payload: { sdp: pc.localDescription, target: viewerId, from: currentUserId } });
+        }).catch(() => {});
+      }
     }).on('broadcast', { event: 'answer' }, ({ payload }) => {
       if (!isCreator || payload.target !== currentUserId) return;
       const pc = peersRef.current.get(payload.from);
-      if (pc) pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+      if (pc) pc.setRemoteDescription(new RTCSessionDescription(payload.sdp)).catch(() => {});
     }).on('broadcast', { event: 'offer' }, ({ payload }) => {
       if (isCreator || payload.target !== currentUserId) return;
-      if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
-      const pc = new RTCPeerConnection(rtcConfig);
-      peerRef.current = pc;
-      const rs = new MediaStream();
-      setRemoteStream(rs);
-      pc.ontrack = (e) => { e.streams[0]?.getTracks().forEach(t => rs.addTrack(t)); if (remoteVideoRef.current) remoteVideoRef.current.srcObject = rs; };
-      pc.onicecandidate = (e) => { if (e.candidate) bc.send({ type: 'broadcast', event: 'ice_candidate', payload: { candidate: e.candidate, from: currentUserId, target: payload.from } }); };
+      // Use existing peer if available (renegotiation), else create new one
+      let pc = peerRef.current;
+      let rs: MediaStream;
+      if (!pc || pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+        pc = new RTCPeerConnection(rtcConfig);
+        peerRef.current = pc;
+        rs = new MediaStream();
+        setRemoteStream(rs);
+        pc.ontrack = (e) => {
+          e.streams[0]?.getTracks().forEach(t => {
+            // Replace existing track of same kind, or add new one
+            const existing = rs.getTracks().find(x => x.kind === t.kind);
+            if (existing) rs.removeTrack(existing);
+            rs.addTrack(t);
+          });
+          if (remoteVideoRef.current) remoteVideoRef.current.srcObject = rs;
+          setRemoteStream(new MediaStream(rs.getTracks())); // trigger re-render
+        };
+        pc.onicecandidate = (e) => { if (e.candidate) bc.send({ type: 'broadcast', event: 'ice_candidate', payload: { candidate: e.candidate, from: currentUserId, target: payload.from } }); };
+      }
       pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
-        .then(() => pc.createAnswer())
-        .then(answer => pc.setLocalDescription(answer))
-        .then(() => { bc.send({ type: 'broadcast', event: 'answer', payload: { sdp: pc.localDescription, target: payload.from, from: currentUserId } }); });
+        .then(() => pc!.createAnswer())
+        .then(answer => pc!.setLocalDescription(answer))
+        .then(() => { bc.send({ type: 'broadcast', event: 'answer', payload: { sdp: pc!.localDescription, target: payload.from, from: currentUserId } }); })
+        .catch(() => {});
     }).on('broadcast', { event: 'ice_candidate' }, ({ payload }) => {
       if (payload.target !== currentUserId) return;
       const pc = isCreator ? peersRef.current.get(payload.from) : peerRef.current;
@@ -156,26 +191,29 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     }).subscribe();
     broadcastRef.current = bc;
 
-    // Viewer: request mode + WebRTC connection
+    // Viewer: request mode + WebRTC connection (retry until mode arrives)
     if (!isCreator) {
+      let retries = 0;
+      const viewerJoinInterval = setInterval(() => {
+        bc.send({ type: 'broadcast', event: 'request_mode', payload: {} });
+        bc.send({ type: 'broadcast', event: 'viewer_join', payload: { viewerId: currentUserId } });
+        retries++;
+        if (retries >= 6) clearInterval(viewerJoinInterval); // stop after 18s
+      }, 3000);
+      // First attempt immediately
       setTimeout(() => {
         bc.send({ type: 'broadcast', event: 'request_mode', payload: {} });
         bc.send({ type: 'broadcast', event: 'viewer_join', payload: { viewerId: currentUserId } });
-      }, 500);
+      }, 600);
     }
 
-    // Creator: periodic mode broadcast
+    // Creator: periodic mode broadcast using refs (closure-safe)
     let modeInterval: any = null;
     if (isCreator) {
       modeInterval = setInterval(() => {
-        let mode = 'idle';
-        if (showWhiteboard && cameraOn) mode = 'camera+whiteboard';
-        else if (showWhiteboard) mode = 'whiteboard';
-        else if (screenOn && cameraOn) mode = 'camera+screen';
-        else if (screenOn) mode = 'screen';
-        else if (cameraOn) mode = 'camera';
+        const mode = creatorModeRef.current;
         bc.send({ type: 'broadcast', event: 'mode', payload: { mode } });
-      }, 5000);
+      }, 4000);
     }
 
     return () => {
@@ -204,7 +242,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     videoRef.current = el;
     if (el && streamRef.current) { el.srcObject = streamRef.current; }
   }, []);
-  // Broadcast mode helper
+  // Broadcast mode helper — also keeps refs in sync for use in closure-safe handlers
   const broadcastMode = (cam: boolean, scr: boolean, wb: boolean) => {
     let mode = 'idle';
     if (wb && cam) mode = 'camera+whiteboard';
@@ -212,6 +250,11 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     else if (scr && cam) mode = 'camera+screen';
     else if (scr) mode = 'screen';
     else if (cam) mode = 'camera';
+    // Update refs (readable from broadcast handlers despite stale closure)
+    cameraOnRef.current = cam;
+    screenOnRef.current = scr;
+    whiteboardOnRef.current = wb;
+    creatorModeRef.current = mode;
     setCreatorMode(mode);
     broadcastRef.current?.send({ type: 'broadcast', event: 'mode', payload: { mode } });
   };
