@@ -383,11 +383,11 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     if (liked) {
       await supabase.from("live_likes").delete().eq("live_id", live.id).eq("user_id", currentUserId);
       await supabase.rpc("increment_live_likes", { p_live_id: live.id, increment_by: -1 });
-      setLiked(false); setLikesCount(c => c - 1);
+      setLiked(false); setLikesCount((c: number) => c - 1);
     } else {
       await supabase.from("live_likes").insert({ live_id: live.id, user_id: currentUserId });
       await supabase.rpc("increment_live_likes", { p_live_id: live.id, increment_by: 1 });
-      setLiked(true); setLikesCount(c => c + 1);
+      setLiked(true); setLikesCount((c: number) => c + 1);
     }
   };
 
