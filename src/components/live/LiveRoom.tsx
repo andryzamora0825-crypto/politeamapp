@@ -17,7 +17,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
   const [liked, setLiked] = useState(false);
   const [likesCount, setLikesCount] = useState(live.likes_count || 0);
   const [viewerCount, setViewerCount] = useState(live.viewer_count || 0);
-  const [isLive, setIsLive] = useState(live.status === "live");
+  const [isLive, setIsLive] = useState(live.status === "live" || isCreator);
   const [showChat, setShowChat] = useState(true);
   const [showWhiteboard, setShowWhiteboard] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -132,11 +132,8 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
       }
       const pc = new RTCPeerConnection(rtcConfig);
       peersRef.current.set(viewerId, pc);
-      // Add current tracks
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => pc.addTrack(t, streamRef.current!));
-      if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach(t => pc.addTrack(t, screenStreamRef.current!));
       pc.onicecandidate = (e) => { if (e.candidate) bc.send({ type: 'broadcast', event: 'ice_candidate', payload: { candidate: e.candidate, from: currentUserId, target: viewerId } }); };
-      // onnegotiationneeded fires automatically after addTrack — handles both initial offer and renegotiation
+      // IMPORTANT: set onnegotiationneeded BEFORE addTrack so the event is never missed
       let isNegotiating = false;
       pc.onnegotiationneeded = async () => {
         if (isNegotiating) return;
@@ -145,10 +142,13 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
           bc.send({ type: 'broadcast', event: 'offer', payload: { sdp: pc.localDescription, target: viewerId, from: currentUserId } });
-        } catch (e) { /* ignore if connection closed */ }
+        } catch (_) { /* ignore if connection closed */ }
         finally { isNegotiating = false; }
       };
-      // If no tracks yet, onnegotiationneeded won't fire — send an initial offer manually
+      // Now add tracks — will trigger onnegotiationneeded if tracks exist
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => pc.addTrack(t, streamRef.current!));
+      if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach(t => pc.addTrack(t, screenStreamRef.current!));
+      // If no tracks yet, trigger initial offer manually (onnegotiationneeded won't fire without tracks)
       if (!streamRef.current && !screenStreamRef.current) {
         pc.createOffer().then(offer => pc.setLocalDescription(offer)).then(() => {
           bc.send({ type: 'broadcast', event: 'offer', payload: { sdp: pc.localDescription, target: viewerId, from: currentUserId } });
