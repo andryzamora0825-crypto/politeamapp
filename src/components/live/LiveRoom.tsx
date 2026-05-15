@@ -357,7 +357,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
             {messages.map((msg) => (
               <div key={msg.id} className="lr-chat-msg">
                 <div className="lr-chat-msg-header">
-                  <UserAvatar src={msg.author?.avatar_url} name={msg.author?.full_name || "?"} size="xs" />
+                  <UserAvatar src={msg.author?.avatar_url} name={msg.author?.full_name || "?"} size="sm" />
                   <span className="lr-chat-msg-author"><span className="verified-name">{msg.author?.full_name || msg.author?.username || "Usuario"}{msg.author?.verified && <VerifiedBadge size={11} />}</span></span>
                 </div>
                 <span className="lr-chat-msg-text">{msg.content}</span>
