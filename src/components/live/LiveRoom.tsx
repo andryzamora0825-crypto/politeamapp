@@ -23,6 +23,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
   const [copied, setCopied] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
+  const [trackCount, setTrackCount] = useState(0); // Dummy state to trigger renders for remote tracks
 
   // Refs to track current state inside broadcast closures (avoid stale closure bug)
   const cameraOnRef = useRef(false);
@@ -169,14 +170,17 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
         rs = new MediaStream();
         setRemoteStream(rs);
         pc.ontrack = (e) => {
-          e.streams[0]?.getTracks().forEach(t => {
-            // Replace existing track of same kind, or add new one
-            const existing = rs.getTracks().find(x => x.kind === t.kind);
-            if (existing) rs.removeTrack(existing);
-            rs.addTrack(t);
-          });
-          if (remoteVideoRef.current) remoteVideoRef.current.srcObject = rs;
-          setRemoteStream(new MediaStream(rs.getTracks())); // trigger re-render
+          const t = e.track;
+          const existing = rs.getTracks().find(x => x.kind === t.kind);
+          if (existing) rs.removeTrack(existing);
+          rs.addTrack(t);
+          if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== rs) {
+            remoteVideoRef.current.srcObject = rs;
+          }
+          if (remotePipRef.current && remotePipRef.current.srcObject !== rs) {
+            remotePipRef.current.srcObject = rs;
+          }
+          setTrackCount(prev => prev + 1); // trigger re-render
         };
         pc.onicecandidate = (e) => { if (e.candidate) bc.send({ type: 'broadcast', event: 'ice_candidate', payload: { candidate: e.candidate, from: currentUserId, target: payload.from } }); };
       }
@@ -231,13 +235,15 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
     supabase.from("live_likes").select("id").eq("live_id", live.id).eq("user_id", currentUserId).single().then(({ data }) => { if (data) setLiked(true); });
   }, []);
 
-  // Bind remote stream to main video and PIP
+  // Bind remote stream to main video and PIP (only when stream instance changes to avoid reload loops)
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
+    if (remoteVideoRef.current && remoteStream && remoteVideoRef.current.srcObject !== remoteStream) {
       remoteVideoRef.current.srcObject = remoteStream;
+      remoteVideoRef.current.play().catch(e => console.log('Autoplay blocked:', e));
     }
-    if (remotePipRef.current && remoteStream) {
+    if (remotePipRef.current && remoteStream && remotePipRef.current.srcObject !== remoteStream) {
       remotePipRef.current.srcObject = remoteStream;
+      remotePipRef.current.play().catch(e => console.log('Autoplay blocked PIP:', e));
     }
   }, [remoteStream, creatorMode]);
 
@@ -653,7 +659,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
         {/* Controls */}
         <div className="lr-controls">
           <button className="lr-ctrl-btn lr-ctrl-exit" onClick={onLeave}>← Salir</button>
-          {isCreator && isLive && (
+          {isCreator && (
             <>
               <button className={`lr-ctrl-btn ${cameraOn ? "lr-ctrl-on" : ""}`} onClick={() => setCameraOn(!cameraOn)}>📹 Cámara</button>
               <button className={`lr-ctrl-btn ${screenOn ? "lr-ctrl-on" : ""}`} onClick={() => setScreenOn(!screenOn)}>🖥️ Pantalla</button>
@@ -665,7 +671,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
           </button>
           <button className="lr-ctrl-btn" onClick={shareLink}>{copied ? "✅ ¡Copiado!" : "🔗 Compartir"}</button>
           <button className="lr-ctrl-btn" onClick={() => setShowChat(!showChat)}>💬 Chat</button>
-          {isCreator && isLive && (
+          {isCreator && (
             <button className="lr-ctrl-btn lr-ctrl-end" onClick={endLive}>⏹ Finalizar</button>
           )}
         </div>
