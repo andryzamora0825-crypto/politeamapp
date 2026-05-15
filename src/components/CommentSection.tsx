@@ -126,7 +126,7 @@ export function CommentSection({ postId, currentUserId, onNewComment }: CommentS
         <div className="comment-reply-input" style={{ marginLeft: Math.min((depth + 1) * 24, 72) }}>
           <div className="comment-input-row">
             <UserAvatar src="" name="U" size="sm" />
-            <input className="comment-input" placeholder={`Responder a ${replyTo.name}...`} value={replyText}
+            <input className="comment-input" placeholder={`Responder a ${replyTo?.name}...`} value={replyText}
               onChange={(e) => setReplyText(e.target.value)} onKeyDown={(e) => handleKeyDown(e, comment.id)} autoFocus />
             <button className="btn btn-ghost btn-sm" onClick={() => submitComment(comment.id)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
