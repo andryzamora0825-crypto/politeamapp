@@ -40,7 +40,10 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
   const streamRef = useRef<MediaStream|null>(null);
   const screenStreamRef = useRef<MediaStream|null>(null);
   const broadcastRef = useRef<any>(null);
-  const [creatorMode, setCreatorMode] = useState<string>("idle"); // idle, camera, screen, whiteboard, camera+whiteboard
+  const [creatorMode, setCreatorMode] = useState<string>("idle");
+  const [floatingHearts, setFloatingHearts] = useState<{id:number;x:number;y:number}[]>([]);
+  const lastTapRef = useRef<number>(0);
+  const heartIdRef = useRef(0);
   const supabase = createClient();
 
   // Join room
@@ -292,6 +295,25 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
   const colors = ["#1a2332", "#ef4444", "#0ea5e9", "#22c55e", "#f59e0b", "#8b5cf6", "#ec4899", "#f97316", "#fff"];
   const quickReactions = ["❤️", "😂", "🔥", "👏", "👍"];
 
+  // Double-tap to like
+  const handleDoubleTap = (e: React.MouseEvent<HTMLDivElement>) => {
+    const now = Date.now();
+    if (now - lastTapRef.current < 300) {
+      const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const id = heartIdRef.current++;
+      setFloatingHearts(prev => [...prev, { id, x, y }]);
+      setLikesCount((c: number) => c + 1);
+      if (!liked) {
+        setLiked(true);
+        supabase.from("live_likes").insert({ user_id: currentUserId, live_id: live.id }).then(() => {});
+      }
+      supabase.rpc("increment_live_likes", { p_live_id: live.id, increment_by: 1 }).then(() => {});
+    }
+    lastTapRef.current = now;
+  };
+
   return (
     <div className="lr-container">
       <div className="lr-main">
@@ -315,7 +337,7 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
         </div>
 
         {/* Stage */}
-        <div className="lr-stage">
+        <div className="lr-stage" onClick={handleDoubleTap} style={{ position: "relative" }}>
           {showWhiteboard && (
             <div className="lr-whiteboard-wrap">
               {isCreator && (
@@ -413,6 +435,11 @@ export function LiveRoom({ live, currentUserId, profile, onLeave }: LiveRoomProp
             </div>
           )}
         </div>
+
+        {/* Floating Hearts */}
+        {floatingHearts.map(h => (
+          <div key={h.id} className="lr-float-heart" style={{ left: h.x, top: h.y }} onAnimationEnd={() => setFloatingHearts(prev => prev.filter(p => p.id !== h.id))}>❤️</div>
+        ))}
 
         {/* Controls */}
         <div className="lr-controls">

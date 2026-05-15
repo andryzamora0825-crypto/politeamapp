@@ -1,6 +1,7 @@
 /* eslint-disable */
 "use client";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { UserAvatar } from "./UserAvatar";
 import { VerifiedBadge } from "./VerifiedBadge";
@@ -23,6 +24,11 @@ export function PostCard({ post, currentUserId, onUpdate, onDelete }: PostCardPr
   const supabase = createClient();
   const isOwner = post.author_id === currentUserId;
   const author = post.author;
+  const router = useRouter();
+
+  const goToProfile = () => {
+    if (author?.username) router.push(`/perfil/${author.username}`);
+  };
 
   const toggleLike = async () => {
     const newLiked = !liked;
@@ -50,9 +56,11 @@ export function PostCard({ post, currentUserId, onUpdate, onDelete }: PostCardPr
   return (
     <div className="card post-card">
       <div className="post-header">
-        <UserAvatar src={author?.avatar_url} name={author?.full_name || "U"} />
+        <div onClick={goToProfile} style={{ cursor: "pointer" }}>
+          <UserAvatar src={author?.avatar_url} name={author?.full_name || "U"} />
+        </div>
         <div className="post-author-info">
-          <div className="post-author-name">
+          <div className="post-author-name" onClick={goToProfile} style={{ cursor: "pointer" }}>
             <span className="verified-name">{author?.full_name || "Usuario"}{author?.verified && <VerifiedBadge />}</span>
           </div>
           <div className="post-time">{timeAgo(post.created_at)}</div>
